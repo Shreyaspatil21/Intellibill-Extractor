@@ -84,15 +84,33 @@ const initDb = async () => {
 };
 initDb();
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const sendEmail = async (mailOptions) => {
+  let smtpHost = 'smtp.gmail.com';
+  try {
+    const ips = await dns.promises.resolve4('smtp.gmail.com');
+    if (ips && ips.length > 0) {
+      smtpHost = ips[0];
+      console.log(`Resolved smtp.gmail.com to IPv4: ${smtpHost}`);
+    }
+  } catch (err) {
+    console.warn('DNS lookup failed for smtp.gmail.com, falling back to default:', err);
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: 465,
+    secure: true,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    tls: {
+      servername: 'smtp.gmail.com',
+    },
+  });
+
+  return transporter.sendMail(mailOptions);
+};
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -153,7 +171,7 @@ app.post('/api/signup', async (req, res) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendEmail(mailOptions);
     res.status(200).json({ message: 'OTP sent to email. Please verify.' });
   } catch (error) {
     console.error('Email error:', error);
@@ -234,7 +252,7 @@ app.post('/api/signin', async (req, res) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendEmail(mailOptions);
     res.status(200).json({ message: 'OTP sent to email. Please verify login.' });
   } catch (error) {
     console.error('Signin error:', error);
