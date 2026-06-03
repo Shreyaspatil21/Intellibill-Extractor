@@ -358,24 +358,24 @@ class MainExtractor:
                      is_summary_line = True
 
                 if is_summary_line:
+                    last_item = None
                     # If we encounter a Grand Total or heavy summary, we consider the table ended
-                    if is_last_page:
-                        if any(rk in raw_upper for rk in ["GRAND TOTAL", "TOTAL AMOUNT", "TOTAL (INR)", "TOTAL (RS)", "NET PAYABLE"]):
-                             break
+                    if any(rk in raw_upper for rk in ["GRAND TOTAL", "TOTAL AMOUNT", "TOTAL (INR)", "TOTAL (RS)", "NET PAYABLE", "TOTAL", "SUBTOTAL"]):
+                         break
                     continue
                 
                 has_dec = bool(re.search(r'[\d,\|\./]{1,10}[,\.\|/]\d{2,4}\b', m['raw']))
                 
                 # TRANSACTIONAL GATING (Contextual Boundary Strategy)
                 if is_summary_line and not (has_dec and len(m['tokens']) > 8):
+                    last_item = None
                     # Hard-break ONLY at categorical document boundaries (Footers)
-                    if is_last_page:
-                        hard_terminals = ["TERMS AND", "DECLARATION", "FOR MY COMPANY", "WORDS ONLY", "RUPEES", "PAISA", "THANK YOU", "AUTHORIZED SIGNATORY"]
-                        if any(ht in raw_upper for ht in hard_terminals):
-                            break
+                    hard_terminals = ["TERMS AND", "DECLARATION", "FOR MY COMPANY", "WORDS ONLY", "RUPEES", "PAISA", "THANK YOU", "AUTHORIZED SIGNATORY"]
+                    if any(ht in raw_upper for ht in hard_terminals):
+                        break
                     continue
                 stripped = m['raw'].strip()
-                if not stripped or m['is_sep'] or "PAGE BREAK" in stripped:
+                if not stripped or m['is_sep'] or "PAGE BREAK" in stripped or re.fullmatch(r'[n\s\-_=\|]+', stripped):
                     continue
                 
                 # --- Smart Descriptive Continuity ---
@@ -394,7 +394,12 @@ class MainExtractor:
 
                 # 2. Heuristic Footer Rejection
                 if not has_dec:
-                    if len(m['tokens']) <= 2 or (m['has_num'] and len(m['tokens']) <= 3): continue
+                    if len(m['tokens']) <= 1:
+                        continue
+                    if len(m['tokens']) <= 3:
+                        ignore_kws = ["DATE", "NO", "PAGE", "TEL", "MOB", "PHONE", "EMAIL", "INVOICE", "ORDER", "CHALLAN"]
+                        if any(k in raw_upper for k in ignore_kws):
+                            continue
                 
                 # 3. Keyword Rejection
                 if any(rk in raw_upper for rk in self.rejection_kws) and not (m['has_num'] and len(m['tokens']) > 10): continue
@@ -406,10 +411,9 @@ class MainExtractor:
 
                 if not is_summary_line:
                     # Hard-Stop Protocol
-                    if is_last_page:
-                        terminal_markers = ["TOTAL", "SUMMARY", "TAX =", "TERMS AND", "DECLARATION", "FOR MY COMPANY", "WORDS ONLY", "PAISA", "E & O.E", "E.O.E"]
-                        if any(tm in raw_upper for tm in terminal_markers) and len(raw_upper) < 200:
-                            break
+                    terminal_markers = ["TOTAL", "SUMMARY", "TAX =", "TERMS AND", "DECLARATION", "FOR MY COMPANY", "WORDS ONLY", "PAISA", "E & O.E", "E.O.E"]
+                    if any(tm in raw_upper for tm in terminal_markers) and len(raw_upper) < 200:
+                        break
 
                     # Capture row data into specific pillars
                     row_data = {}
@@ -459,8 +463,8 @@ class MainExtractor:
                              else:
                                  row_data[c['label']] = c_text_raw
                         else:
-                            row_data[c['label']] = c_text_raw
-                            item_found = True
+                             row_data[c['label']] = c_text_raw
+                             item_found = True
 
                     # Identification: Does this row start a new transaction?
                     num_count = sum(1 for t in m['tokens'] if bool(re.search(r'\d', t.group(0))))
@@ -470,8 +474,26 @@ class MainExtractor:
                         sr_val = str(row_data[current_cols[0]['label']])
                         if re.match(r'^[0-9SOIGB]+$', sr_val) and len(sr_val) <= 4: starts_with_sr = True
 
-                    # A line item usually has a decimal number or at least 2 numbers (Qty + Rate)
-                    is_main_item = (starts_with_sr or (has_dec and num_count >= 1) or num_count >= 3)
+                    # Aligned description and numeric columns validation
+                    has_desc_val = False
+                    for col_lbl, col_val in row_data.items():
+                        if any(k in col_lbl.upper() for k in ["DESC", "ITEM", "NAME", "PRODUCT", "PARTICULAR", "DETAIL"]):
+                            if col_val and len(str(col_val).strip()) >= 2:
+                                has_desc_val = True
+                                break
+                    
+                    has_numeric_val = False
+                    for col_lbl, col_val in row_data.items():
+                        if any(k in col_lbl.upper() for k in ["AMOUNT", "PRICE", "RATE", "QTY", "TOTAL", "VALUE", "COST", "TAX", "DISC"]):
+                            if col_val and any(char.isdigit() for char in str(col_val)):
+                                has_numeric_val = True
+                                break
+
+                    # A line item usually has a decimal number, 3 numbers, or a valid description/numeric column pair
+                    is_main_item = (starts_with_sr or 
+                                    (has_dec and num_count >= 1) or 
+                                    num_count >= 3 or 
+                                    (has_desc_val and has_numeric_val))
                     
                     if is_main_item:
                         if len(row_data) < 2 and not starts_with_sr:

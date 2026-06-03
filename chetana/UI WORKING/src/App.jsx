@@ -238,10 +238,10 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
             Sends files to the Python Flask ETL server on port 5000 · Up to 16MB
           </p>
           <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '1.5rem' }}>
-            <button className="btn-primary" style={{ background: '#2563eb', padding: '10px 24px' }} disabled={uploading} onClick={() => fileInputRef.current.click()}>
+            <button className="btn-primary" style={{ background: '#2563eb', padding: '10px 24px' }} disabled={uploading} onClick={(e) => { e.stopPropagation(); fileInputRef.current.click(); }}>
               Browse Files
             </button>
-            <button className="btn-primary" onClick={onClearHistory} style={{ background: '#ef4444', padding: '10px 24px' }} disabled={uploading}>
+            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onClearHistory(); }} style={{ background: '#ef4444', padding: '10px 24px' }} disabled={uploading}>
               Clear History
             </button>
           </div>
@@ -1584,6 +1584,9 @@ const App = () => {
 
   const handleLogout = () => {
     localStorage.removeItem('token');
+    if (window.google) {
+      window.google.accounts.id.disableAutoSelect();
+    }
     setStep('auth');
     setUser(null);
     setFormData({ name: '', email: '', password: '' });
@@ -1592,6 +1595,9 @@ const App = () => {
 
   // --- Real Google One Tap & Account Native Logic (Optimized for Speed) ---
   useEffect(() => {
+    if (step !== 'auth') return;
+
+    let interval;
     const initializeGoogle = () => {
       if (window.google) {
         window.google.accounts.id.initialize({
@@ -1619,12 +1625,15 @@ const App = () => {
 
     // Immediate check + Fast polling fallback
     if (!initializeGoogle()) {
-      const interval = setInterval(() => {
+      interval = setInterval(() => {
         if (initializeGoogle()) clearInterval(interval);
       }, 100);
-      return () => clearInterval(interval);
     }
-  }, []);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [step]);
 
   const handleGoogleCallback = async (response) => {
     setLoading(true);

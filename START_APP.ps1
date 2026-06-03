@@ -10,7 +10,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # --- Paths ---
-$backendDir  = "$PSScriptRoot\shreyash\ETL_GRP (1)\ETL_GRP\ETL_2"
+$backendDir  = "$PSScriptRoot\shreyash\ETL_GRP_1\ETL_GRP\ETL_2"
 $frontendDir = "$PSScriptRoot\chetana\UI WORKING"
 
 # --- 1. Start Python Flask ETL Backend (Port 5000) ---

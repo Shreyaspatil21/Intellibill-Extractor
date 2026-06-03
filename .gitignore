@@ -6,3 +6,7 @@ output/
 *.xlsx
 *.csv
 __pycache__/
+node_modules/
+.env
+dist/
+.DS_Store
