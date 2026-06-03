@@ -6,8 +6,9 @@ from werkzeug.utils import secure_filename
 import pandas as pd
 import sys
 
-# Ensure ETL folder is in path
+# Ensure ETL folder is in path (handles both structured and flat uploads)
 current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "ETL"))
 
 from bill_to_text import BillConverter
