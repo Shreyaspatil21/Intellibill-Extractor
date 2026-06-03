@@ -85,31 +85,33 @@ const initDb = async () => {
 initDb();
 
 const sendEmail = async (mailOptions) => {
-  let smtpHost = 'smtp.gmail.com';
-  try {
-    const ips = await dns.promises.resolve4('smtp.gmail.com');
-    if (ips && ips.length > 0) {
-      smtpHost = ips[0];
-      console.log(`Resolved smtp.gmail.com to IPv4: ${smtpHost}`);
-    }
-  } catch (err) {
-    console.warn('DNS lookup failed for smtp.gmail.com, falling back to default:', err);
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error('RESEND_API_KEY environment variable is not defined.');
   }
 
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: 465,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+  const toEmails = typeof mailOptions.to === 'string' ? [mailOptions.to] : mailOptions.to;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
     },
-    tls: {
-      servername: 'smtp.gmail.com',
-    },
+    body: JSON.stringify({
+      from: 'IntelliBill Extract <onboarding@resend.dev>',
+      to: toEmails,
+      subject: mailOptions.subject,
+      html: mailOptions.html,
+    }),
   });
 
-  return transporter.sendMail(mailOptions);
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Resend API error: ${response.status} - ${errorText}`);
+  }
+
+  return response.json();
 };
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
