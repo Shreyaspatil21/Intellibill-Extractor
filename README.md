@@ -1,12 +1,3 @@
----
-title: Intellibill Etl
-emoji: 🧠
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-app_port: 7860
----
-
 # 🧾 ETL Billing System
 
 ## 📌 Overview
