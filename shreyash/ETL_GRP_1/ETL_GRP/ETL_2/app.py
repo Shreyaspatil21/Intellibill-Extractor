@@ -7,7 +7,8 @@ import pandas as pd
 import sys
 
 # Ensure ETL folder is in path
-sys.path.append(os.path.join(os.getcwd(), "ETL"))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.join(current_dir, "ETL"))
 
 from bill_to_text import BillConverter
 from rule_generator import RuleGenerator
@@ -132,6 +133,6 @@ def download_file(filename):
     )
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", 5000))
     print(f"Aveenya ETL Server starting on http://localhost:{port}")
     app.run(host='0.0.0.0', port=port, debug=False)
