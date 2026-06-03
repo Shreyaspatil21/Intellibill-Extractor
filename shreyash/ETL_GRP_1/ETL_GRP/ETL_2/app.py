@@ -132,6 +132,6 @@ def download_file(filename):
     )
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 7860))
     print(f"Aveenya ETL Server starting on http://localhost:{port}")
     app.run(host='0.0.0.0', port=port, debug=False)
