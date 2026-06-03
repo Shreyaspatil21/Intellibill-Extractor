@@ -47,6 +47,13 @@ def upload_file():
             # 1. Convert to Text
             text, word_map = converter.convert(file_path)
             
+            # Validate if the document is a bill/invoice
+            billing_keywords = ["INVOICE", "TAX INVOICE", "BILL", "RECEIPT", "STATEMENT", "GSTIN", "TOTAL", "AMOUNT", "PAYABLE", "QTY", "RATE", "PRICE", "TAX", "CGST", "SGST", "IGST", "VAT", "HSN"]
+            text_upper = (text or "").upper()
+            hits = sum(1 for kw in billing_keywords if kw in text_upper)
+            if hits < 3:
+                return jsonify({"error": "The uploaded document does not appear to be a valid invoice or bill. Extraction stopped."}), 422
+            
             # 2. Extract Rules & Data
             generator = RuleGenerator(text)
             rules = generator.generate_rules()
@@ -68,7 +75,7 @@ def upload_file():
                 "message": "Extraction Successful",
                 "filename": output_filename,
                 "download_url": f"/download/{output_filename}",
-                "preview_data": items[:3], # Send first 3 items for UI preview
+                "preview_data": items, # Send all items for UI preview
                 "raw_text": text,
                 "rules": rules
             })
@@ -103,7 +110,7 @@ def reprocess():
         return jsonify({
             "message": "Reprocessing Successful",
             "download_url": f"/download/{output_filename}",
-            "preview_data": items[:3]
+            "preview_data": items
         })
     except Exception as e:
         print(f"  [REPROCESS ERROR] {str(e)}")
@@ -125,5 +132,6 @@ def download_file(filename):
     )
 
 if __name__ == '__main__':
-    print("Aveenya ETL Server starting on http://localhost:5000")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    print(f"Aveenya ETL Server starting on http://localhost:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False)

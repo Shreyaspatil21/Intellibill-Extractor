@@ -20,20 +20,23 @@ import {
   FileSpreadsheet,
   Database,
   ChevronRight,
+  ChevronLeft,
+  Menu,
   Search,
   Upload,
   Zap,
+  X,
   Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API_URL = '';              // Node.js auth server
-const PYTHON_API_URL = 'http://localhost:5000'; // Direct connection to FastAPI
+const API_URL = import.meta.env.VITE_API_URL || '';              // Node.js auth server
+const PYTHON_API_URL = import.meta.env.VITE_PYTHON_API_URL || '/etl'; // Route through Vite proxy to avoid CORS/DNS issues
 
 
 // --- Placeholder Pages for Dashboard ---
 // --- High-Fidelity Dashboard Page Components ---
-const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClearHistory }) => {
+const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClearHistory, onViewTxt, onViewRules, onViewMainXlsx }) => {
   const [uploading, setUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('All');
@@ -69,6 +72,25 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
       previewData: null,
       error: null,
     }));
+
+    const token = localStorage.getItem('token');
+
+    // Save initial Processing entries to the DB
+    for (const entry of newEntries) {
+      try {
+        await fetch(`${API_URL}/api/history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(entry)
+        });
+      } catch (err) {
+        console.error("Failed to save initial history item to DB:", err);
+      }
+    }
+
     setHistory((prev) => [...newEntries, ...prev]);
     setUploading(true);
 
@@ -86,41 +108,99 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
         const data = await response.json();
 
         if (response.ok) {
+          const updated = {
+            id: entryId,
+            name: file.name,
+            status: 'Completed',
+            date: newEntries[idx].date,
+            confidence: '✓ Extracted',
+            downloadUrl: `${PYTHON_API_URL}${data.download_url}`,
+            previewData: data.preview_data || [],
+            rawText: data.raw_text || '',
+            rules: data.rules || [],
+            error: null,
+          };
+
+          // Save completed record to DB
+          try {
+            await fetch(`${API_URL}/api/history`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify(updated)
+            });
+          } catch (err) {
+            console.error("Failed to save completed history item to DB:", err);
+          }
+
           setHistory((prev) =>
-            prev.map((item) => {
-              if (item.id === entryId) {
-                const updated = {
-                  ...item,
-                  status: 'Completed',
-                  confidence: '✓ Extracted',
-                  downloadUrl: `${PYTHON_API_URL}${data.download_url}`,
-                  previewData: data.preview_data || [],
-                  rawText: data.raw_text || '',
-                  rules: data.rules || [],
-                  error: null,
-                };
-                setSelectedId(entryId); // Auto-select the newly finished file
-                return updated;
-              }
-              return item;
-            })
+            prev.map((item) => (item.id === entryId ? updated : item))
           );
+          setSelectedId(entryId); // Auto-select the newly finished file
         } else {
+          const failed = {
+            id: entryId,
+            name: file.name,
+            status: 'Error',
+            date: newEntries[idx].date,
+            confidence: '--',
+            downloadUrl: null,
+            previewData: null,
+            rawText: null,
+            rules: null,
+            error: data.error || 'Processing failed'
+          };
+
+          // Save failed record to DB
+          try {
+            await fetch(`${API_URL}/api/history`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify(failed)
+            });
+          } catch (err) {
+            console.error("Failed to save failed history item to DB:", err);
+          }
+
           setHistory((prev) =>
-            prev.map((item) =>
-              item.id === entryId
-                ? { ...item, status: 'Error', confidence: '--', error: data.error || 'Processing failed' }
-                : item
-            )
+            prev.map((item) => (item.id === entryId ? failed : item))
           );
         }
       } catch (err) {
+        const networkFailed = {
+          id: entryId,
+          name: file.name,
+          status: 'Error',
+          date: newEntries[idx].date,
+          confidence: '--',
+          downloadUrl: null,
+          previewData: null,
+          rawText: null,
+          rules: null,
+          error: 'Cannot reach ETL server on port 5000'
+        };
+
+        // Save network failure to DB
+        try {
+          await fetch(`${API_URL}/api/history`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(networkFailed)
+          });
+        } catch (dbErr) {
+          console.error("Failed to save network error history item to DB:", dbErr);
+        }
+
         setHistory((prev) =>
-          prev.map((item) =>
-            item.id === entryId
-              ? { ...item, status: 'Error', confidence: '--', error: 'Cannot reach ETL server on port 5000' }
-              : item
-          )
+          prev.map((item) => (item.id === entryId ? networkFailed : item))
         );
       }
     });
@@ -235,7 +315,7 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
                 <th>Status</th>
                 <th>Timestamp</th>
                 <th>Result</th>
-                <th style={{ textAlign: 'right' }}>Download</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -265,33 +345,58 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
                   <td>{file.date}</td>
                   <td>
                     {file.error ? (
-                      <span style={{ color: '#ef4444', fontSize: '0.75rem' }}>{file.error}</span>
+                       <span style={{ color: '#ef4444', fontSize: '0.75rem' }}>{file.error}</span>
                     ) : (
                       <strong style={{ color: '#1e293b' }}>{file.confidence}</strong>
                     )}
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    {file.downloadUrl ? (
-                      <a
-                        href={file.downloadUrl}
-                        download={file.name.replace('.jpeg', '').replace('.jpg', '') + '.xlsx'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => console.log('Downloading from:', file.downloadUrl)}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: '6px',
-                          padding: '6px 14px', borderRadius: '8px', fontSize: '0.75rem',
-                          fontWeight: 700, background: '#10b981', color: 'white',
-                          textDecoration: 'none', transition: 'opacity 0.2s'
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.opacity = '0.8'}
-                        onMouseOut={(e) => e.currentTarget.style.opacity = '1'}
-                      >
-                        <FileSpreadsheet size={14} />
-                        Download Excel
-                      </a>
+                    {file.status === 'Completed' ? (
+                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', flexWrap: 'nowrap', alignItems: 'center' }}>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onViewTxt(file); }}
+                          className="btn-primary"
+                          style={{
+                            margin: 0, padding: '6px 12px', fontSize: '0.75rem',
+                            background: '#2563eb', color: 'white', fontWeight: 600,
+                            display: 'inline-flex', alignItems: 'center', gap: '6px'
+                          }}
+                        >
+                          <FileText size={14} />
+                          View .txt
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onViewRules(file); }}
+                          className="btn-primary"
+                          style={{
+                            margin: 0, padding: '6px 12px', fontSize: '0.75rem',
+                            background: '#7c3aed', color: 'white', fontWeight: 600,
+                            display: 'inline-flex', alignItems: 'center', gap: '6px'
+                          }}
+                        >
+                          <Settings size={14} />
+                          Rules XLSX
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onViewMainXlsx(file); }}
+                          className="btn-primary"
+                          style={{
+                            margin: 0, padding: '6px 12px', fontSize: '0.75rem',
+                            background: '#ea580c', color: 'white', fontWeight: 600,
+                            display: 'inline-flex', alignItems: 'center', gap: '6px'
+                          }}
+                        >
+                          <Database size={14} />
+                          Main XLSX
+                        </button>
+                      </div>
+                    ) : file.status === 'Error' ? (
+                      <span style={{ color: '#ef4444', fontSize: '0.75rem', fontWeight: 600 }}>Error</span>
                     ) : (
-                      <ChevronRight size={18} color="#94a3b8" />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
+                        <RefreshCcw size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                        <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Processing...</span>
+                      </div>
                     )}
                   </td>
                 </tr>
@@ -385,7 +490,7 @@ const ProcessingPage = ({ history, setHistory, selectedId, setSelectedId, onClea
 };
 
 
-const RulesPage = ({ history, selectedId, setSelectedId, onUpdateRule, onApplyRules, onClearHistory, loading }) => {
+const RulesPage = ({ history, selectedId, setSelectedId, onUpdateRule, onApplyRules, onClearHistory, loading, onViewRules }) => {
   const [ruleSearch, setRuleSearch] = useState('');
   const selectedFile = history.find(f => f.id === selectedId) || history.find(f => f.rules);
   const rules = selectedFile?.rules || [];
@@ -461,6 +566,39 @@ const RulesPage = ({ history, selectedId, setSelectedId, onUpdateRule, onApplyRu
                   <p style={{ fontSize: '0.75rem', color: '#64748b' }}>Edits are saved locally and applied to future exports.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    className="btn-primary"
+                    style={{ margin: 0, padding: '8px 16px', fontSize: '0.75rem', background: '#7c3aed' }}
+                    onClick={() => onViewRules(selectedFile)}
+                  >
+                    View Rules Table
+                  </button>
+                  <button
+                    className="btn-primary"
+                    style={{ margin: 0, padding: '8px 16px', fontSize: '0.75rem', background: '#4f46e5' }}
+                    onClick={() => {
+                      const headers = ["Rule ID", "Field Name", "Sample Text", "Field Datatype", "Row", "Section"];
+                      const rows = selectedFile.rules.map(r => [
+                        r["Rule ID"],
+                        r["Field Name"],
+                        r["Sample Text"],
+                        r["Field Datatype"],
+                        r["Row"],
+                        r["Section"]
+                      ]);
+                      const csvContent = "data:text/csv;charset=utf-8," 
+                        + [headers.join(","), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
+                      const encodedUri = encodeURI(csvContent);
+                      const link = document.createElement("a");
+                      link.setAttribute("href", encodedUri);
+                      link.setAttribute("download", `${selectedFile.name.split('.')[0]}_rules.csv`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                  >
+                    Download Rules
+                  </button>
                   <button 
                     className="btn-primary" 
                     disabled={loading}
@@ -534,7 +672,7 @@ const RulesPage = ({ history, selectedId, setSelectedId, onUpdateRule, onApplyRu
   );
 };
 
-const ExcelsPage = ({ history, onClearHistory }) => {
+const ExcelsPage = ({ history, onClearHistory, onViewMainXlsx }) => {
   // Be more inclusive: show anything that has a download link or is marked successful
   const successfulFiles = history.filter(f => 
     (f.status?.toLowerCase() === 'completed' || f.downloadUrl) && !f.error
@@ -598,21 +736,35 @@ const ExcelsPage = ({ history, onClearHistory }) => {
                     </span>
                   </td>
                   <td style={{ textAlign: 'right' }}>
-                    <a 
-                      href={file.downloadUrl} 
-                      download 
-                      target="_blank" 
-                      rel="noopener noreferrer"
-                      className="btn-primary"
-                      style={{ 
-                        margin: 0, padding: '8px 16px', fontSize: '0.75rem', 
-                        background: '#10b981', color: 'white', textDecoration: 'none',
-                        display: 'inline-flex', alignItems: 'center', gap: '8px'
-                      }}
-                    >
-                      <Download size={14} />
-                      Download Final
-                    </a>
+                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                      <button
+                        onClick={() => onViewMainXlsx(file)}
+                        className="btn-primary"
+                        style={{
+                          margin: 0, padding: '8px 16px', fontSize: '0.75rem',
+                          background: '#2563eb', color: 'white',
+                          display: 'inline-flex', alignItems: 'center', gap: '8px'
+                        }}
+                      >
+                        <Eye size={14} />
+                        View Table
+                      </button>
+                      <a 
+                        href={file.downloadUrl} 
+                        download 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="btn-primary"
+                        style={{ 
+                          margin: 0, padding: '8px 16px', fontSize: '0.75rem', 
+                          background: '#10b981', color: 'white', textDecoration: 'none',
+                          display: 'inline-flex', alignItems: 'center', gap: '8px'
+                        }}
+                      >
+                        <Download size={14} />
+                        Download Final
+                      </a>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -635,56 +787,60 @@ const ExcelsPage = ({ history, onClearHistory }) => {
 };
 
 // --- Refined Dashboard Components ---
-const Sidebar = ({ activeTab, setActiveTab, user, onLogout }) => (
-  <aside className="sidebar">
-    <div className="sidebar-logo">
-      <img src="/logo.png" alt="IntelliExtract Logo" className="sidebar-logo-img" />
-    </div>
-
-    <div className="sidebar-nav">
-      <NavItem active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<LayoutDashboard size={18} />} label="Dashboard" />
-      <NavItem active={activeTab === 'processing'} onClick={() => setActiveTab('processing')} icon={<Layers size={18} />} label="Processing" />
-      <NavItem active={activeTab === 'rules'} onClick={() => setActiveTab('rules')} icon={<Settings size={18} />} label="Rules" />
-      <NavItem active={activeTab === 'excels'} onClick={() => setActiveTab('excels')} icon={<FileSpreadsheet size={18} />} label="Excels" />
-    </div>
-
-    <div style={{ marginTop: '2rem' }}>
-      <p className="sidebar-section-label">Data Assets</p>
-      <div className="nav-item">
-        <FileSpreadsheet size={18} color="#059669" />
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span>Rules.xlsx</span>
-          <span style={{ fontSize: '0.65rem', color: 'var(--text-secondary)' }}>Central Config</span>
-        </div>
-      </div>
-      <div className="nav-item">
-        <FileSpreadsheet size={18} color="#4f46e5" />
-        <span>Main.xlsx</span>
-      </div>
-    </div>
-
-    <div style={{ marginTop: 'auto' }}>
-      <div className="user-profile" style={{ padding: '1rem', background: 'var(--bg-tertiary)', borderRadius: '12px', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '12px', border: '1px solid var(--border)' }}>
-        <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>
-          {user?.name?.[0]?.toUpperCase() || 'U'}
-        </div>
-        <div style={{ overflow: 'hidden' }}>
-          <div style={{ fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user?.name}</div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user?.email}</div>
-        </div>
-      </div>
-      <button className="nav-item" style={{ width: '100%', background: 'none', border: 'none', color: '#ef4444', marginBottom: 0, paddingLeft: '12px' }} onClick={onLogout}>
-        <LogOut size={18} />
-        <span>Logout</span>
+const Sidebar = ({ activeTab, setActiveTab, user, onLogout, collapsed, setCollapsed, mobileOpen, setMobileOpen }) => (
+  <>
+    {mobileOpen && (
+      <div className="sidebar-overlay" onClick={() => setMobileOpen(false)} />
+    )}
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
+      <button 
+        className="collapse-toggle" 
+        onClick={() => setCollapsed(!collapsed)}
+        style={{ transform: collapsed ? 'rotate(180deg)' : 'none' }}
+      >
+        <ChevronLeft size={16} />
       </button>
-    </div>
-  </aside>
+
+      <div className="sidebar-logo">
+        <img src="/logo.png" alt="IntelliExtract Logo" className="sidebar-logo-img" />
+      </div>
+
+      <div className="sidebar-nav">
+        <NavItem active={activeTab === 'dashboard'} onClick={() => { setActiveTab('dashboard'); setMobileOpen(false); }} icon={<LayoutDashboard size={18} />} label="Dashboard" collapsed={collapsed} />
+        <NavItem active={activeTab === 'processing'} onClick={() => { setActiveTab('processing'); setMobileOpen(false); }} icon={<Layers size={18} />} label="Processing" collapsed={collapsed} />
+        <NavItem active={activeTab === 'rules'} onClick={() => { setActiveTab('rules'); setMobileOpen(false); }} icon={<Settings size={18} />} label="Rules" collapsed={collapsed} />
+        <NavItem active={activeTab === 'excels'} onClick={() => { setActiveTab('excels'); setMobileOpen(false); }} icon={<FileSpreadsheet size={18} />} label="Excels" collapsed={collapsed} />
+      </div>
+
+      <div style={{ marginTop: 'auto' }}>
+        <div className="user-profile" style={{ padding: collapsed ? '6px' : '1rem', background: 'var(--bg-tertiary)', borderRadius: '12px', marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: '12px', border: '1px solid var(--border)', overflow: 'hidden' }}>
+          <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: 'var(--accent-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: '0.8rem', flexShrink: 0 }}>
+            {user?.name?.[0]?.toUpperCase() || 'U'}
+          </div>
+          {!collapsed && (
+            <div style={{ overflow: 'hidden' }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 700, whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user?.name}</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{user?.email}</div>
+            </div>
+          )}
+        </div>
+        <button 
+          className="nav-item" 
+          style={{ width: '100%', background: 'none', border: 'none', color: '#ef4444', marginBottom: 0, paddingLeft: '12px', justifyContent: collapsed ? 'center' : 'flex-start' }} 
+          onClick={onLogout}
+        >
+          <LogOut size={18} style={{ flexShrink: 0 }} />
+          {!collapsed && <span>Logout</span>}
+        </button>
+      </div>
+    </aside>
+  </>
 );
 
-const NavItem = ({ active, onClick, icon, label }) => (
-  <div className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
+const NavItem = ({ active, onClick, icon, label, collapsed }) => (
+  <div className={`nav-item ${active ? 'active' : ''}`} onClick={onClick} title={collapsed ? label : ''}>
     {icon}
-    <span>{label}</span>
+    {!collapsed && <span>{label}</span>}
   </div>
 );
 
@@ -726,19 +882,33 @@ const StatCard = ({ label, value, icon, trend }) => (
   </div>
 );
 
-const RecentProcessingPreview = () => (
-  <div className="auth-card" style={{ maxWidth: 'none', padding: '1.5rem', flex: 1, animation: 'none' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-      <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Recent Executions</h3>
-      <button className="btn-link">View All</button>
+const RecentProcessingPreview = ({ history, setActiveTab }) => {
+  const recent = history.slice(0, 3);
+  return (
+    <div className="auth-card" style={{ maxWidth: 'none', padding: '1.5rem', flex: 1, animation: 'none' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Recent Executions</h3>
+        <button className="btn-link" onClick={() => setActiveTab('processing')}>View All</button>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        {recent.length > 0 ? (
+          recent.map((item) => (
+            <MiniTableRow 
+              key={item.id} 
+              name={item.name} 
+              status={item.status} 
+              time={item.date} 
+            />
+          ))
+        ) : (
+          <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+            No recent executions found.
+          </div>
+        )}
+      </div>
     </div>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-      <MiniTableRow name="Invoice_Amazon.pdf" status="Completed" time="10m ago" />
-      <MiniTableRow name="Utility_04_24.pdf" status="Completed" time="2h ago" />
-      <MiniTableRow name="Cloud_Compute_Usage.pdf" status="Pending" time="5h ago" />
-    </div>
-  </div>
-);
+  );
+};
 
 const MiniTableRow = ({ name, status, time }) => (
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', borderRadius: '8px', background: 'var(--bg-tertiary)' }}>
@@ -748,7 +918,7 @@ const MiniTableRow = ({ name, status, time }) => (
     </div>
     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
       <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{time}</span>
-      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status === 'Completed' ? '#10b981' : '#f59e0b' }} />
+      <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: status === 'Completed' ? '#10b981' : (status === 'Error' ? '#ef4444' : '#f59e0b') }} />
     </div>
   </div>
 );
@@ -823,6 +993,300 @@ const PipelineVisualization = () => (
   </section>
 );
 
+const FileModal = ({ viewModal, onClose }) => {
+  if (!viewModal) return null;
+  const { type, file } = viewModal;
+
+  const handleDownloadCsv = () => {
+    let headers = [];
+    let rows = [];
+    let filename = `${file.name.split('.')[0]}_preview.csv`;
+
+    if (type === 'rules') {
+      headers = ["Rule ID", "Field Name", "Sample Text", "Field Datatype", "Row", "Section"];
+      rows = file.rules.map(r => [
+        r["Rule ID"],
+        r["Field Name"],
+        r["Sample Text"],
+        r["Field Datatype"],
+        r["Row"],
+        r["Section"]
+      ]);
+      filename = `${file.name.split('.')[0]}_rules.csv`;
+    } else if (type === 'main_xlsx') {
+      if (file.previewData && file.previewData.length > 0) {
+        headers = Object.keys(file.previewData[0]);
+        rows = file.previewData.map(row => headers.map(k => row[k] ?? ''));
+      }
+      filename = `${file.name.split('.')[0]}_main.csv`;
+    } else {
+      // txt
+      const element = document.createElement("a");
+      const textFile = new Blob([file.rawText || ''], {type: 'text/plain'});
+      element.href = URL.createObjectURL(textFile);
+      element.download = `${file.name.split('.')[0]}_text.txt`;
+      document.body.appendChild(element);
+      element.click();
+      document.body.removeChild(element);
+      return;
+    }
+
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + [headers.join(","), ...rows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.65)',
+      backdropFilter: 'blur(8px)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 99999,
+      padding: '2rem',
+      animation: 'fadeIn 0.2s ease-out'
+    }} onClick={onClose}>
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.85)',
+        backdropFilter: 'blur(20px)',
+        border: '1px solid rgba(255, 255, 255, 0.4)',
+        borderRadius: '24px',
+        width: '100%',
+        maxWidth: '1000px',
+        maxHeight: '85vh',
+        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        animation: 'scaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)'
+      }} onClick={(e) => e.stopPropagation()}>
+        
+        {/* Modal Header */}
+        <div style={{
+          padding: '1.5rem 2rem',
+          borderBottom: '1px solid rgba(0, 0, 0, 0.08)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: 'rgba(255, 255, 255, 0.4)'
+        }}>
+          <div>
+            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {type === 'txt' && <FileText size={22} color="#2563eb" />}
+              {type === 'rules' && <Settings size={22} color="#7c3aed" />}
+              {type === 'main_xlsx' && <Database size={22} color="#ea580c" />}
+              {type === 'txt' && `View Text File: ${file.name}`}
+              {type === 'rules' && `View Extraction Rules: ${file.name}`}
+              {type === 'main_xlsx' && `View Extracted Main Table: ${file.name}`}
+            </h2>
+            <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#64748b' }}>
+              Showing file data persisted in PostgreSQL database
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <button
+              onClick={handleDownloadCsv}
+              className="btn-primary"
+              style={{
+                margin: 0, padding: '8px 16px', fontSize: '0.75rem',
+                background: '#10b981', color: 'white',
+                display: 'inline-flex', alignItems: 'center', gap: '6px'
+              }}
+            >
+              <Download size={14} />
+              Download {type === 'txt' ? 'Text' : 'CSV'}
+            </button>
+            <button
+              onClick={onClose}
+              style={{
+                background: 'rgba(0, 0, 0, 0.05)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '32px',
+                height: '32px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: '#64748b',
+                transition: 'background 0.2s'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.1)'}
+              onMouseOut={(e) => e.currentTarget.style.background = 'rgba(0, 0, 0, 0.05)'}
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Modal Body */}
+        <div style={{
+          padding: '2rem',
+          overflowY: 'auto',
+          flex: 1,
+          background: 'rgba(255, 255, 255, 0.2)'
+        }}>
+          {type === 'txt' && (
+            <div style={{
+              background: '#0f172a',
+              color: '#e2e8f0',
+              padding: '1.5rem',
+              borderRadius: '16px',
+              fontFamily: 'monospace',
+              fontSize: '0.85rem',
+              lineHeight: '1.6',
+              whiteSpace: 'pre-wrap',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.2)',
+              minHeight: '200px'
+            }}>
+              {file.rawText || "No layout-aware text available for this document."}
+            </div>
+          )}
+
+          {type === 'rules' && (
+            <div className="glass-panel" style={{ padding: 0, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.08)' }}>
+              {file.rules && file.rules.length > 0 ? (
+                <table className="history-table" style={{ width: '100%', fontSize: '0.8rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Rule ID</th>
+                      <th>Field Name</th>
+                      <th>Sample Content / Target</th>
+                      <th>Datatype</th>
+                      <th>Row</th>
+                      <th>Section</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {file.rules.map((rule, idx) => (
+                      <tr key={idx}>
+                        <td style={{ fontWeight: 700, color: '#7c3aed' }}>{rule["Rule ID"]}</td>
+                        <td style={{ fontWeight: 600 }}>{rule["Field Name"]}</td>
+                        <td>{rule["Sample Text"]}</td>
+                        <td>{rule["Field Datatype"]}</td>
+                        <td>{rule["Row"]}</td>
+                        <td>
+                          <span className="status-badge processing" style={{ padding: '2px 6px' }}>{rule["Section"]}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
+                  No rules found for this document.
+                </div>
+              )}
+            </div>
+          )}
+
+          {type === 'main_xlsx' && (
+            <div className="glass-panel" style={{ padding: 0, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.08)' }}>
+              {file.previewData && file.previewData.length > 0 ? (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="history-table" style={{ width: '100%', fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr>
+                        {Object.keys(file.previewData[0]).map(k => <th key={k}>{k}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {file.previewData.map((row, i) => (
+                        <tr key={i}>
+                          {Object.keys(file.previewData[0]).map(k => <td key={k}>{row[k] ?? '—'}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ padding: '3rem', textAlign: 'center', color: '#94a3b8' }}>
+                  No main sheet data preview available for this document.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LoadingScreen = () => {
+  const [progress, setProgress] = useState(0);
+  const [loadingText, setLoadingText] = useState('Securing connection...');
+
+  useEffect(() => {
+    const textInterval = setInterval(() => {
+      const texts = [
+        'Securing connection...',
+        'Authenticating session...',
+        'Decrypting credentials...',
+        'Loading pipelines...',
+        'Rendering workspace...'
+      ];
+      setLoadingText(prev => {
+        const idx = texts.indexOf(prev);
+        return texts[(idx + 1) % texts.length];
+      });
+    }, 450);
+
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 100) {
+          clearInterval(progressInterval);
+          return 100;
+        }
+        return prev + 5;
+      });
+    }, 80);
+
+    return () => {
+      clearInterval(textInterval);
+      clearInterval(progressInterval);
+    };
+  }, []);
+
+  return (
+    <div className="loading-screen-container">
+      <div className="loading-content">
+        <div className="loading-logo-wrapper">
+          <img src="/logo.png" alt="IntelliExtract Logo" className="loading-logo" />
+          <div className="logo-glow" />
+        </div>
+        
+        <div className="loading-spinner-wrapper">
+          <div className="modern-spinner">
+            <div className="spinner-ring ring-1"></div>
+            <div className="spinner-ring ring-2"></div>
+            <div className="spinner-ring ring-3"></div>
+          </div>
+        </div>
+
+        <div className="progress-bar-container">
+          <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
+        </div>
+
+        <p className="loading-status-text">{loadingText}</p>
+        <span className="loading-percent">{progress}%</span>
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
   const [step, setStep] = useState('auth'); // auth, otp, dashboard
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -831,6 +1295,8 @@ const App = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [toast, setToast] = useState(null);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -842,38 +1308,60 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [history, setHistory] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [viewModal, setViewModal] = useState(null);
   const otpRefs = useRef([]);
 
-  // --- Persistent History Loading ---
+  // --- Load history from DB when logged in ---
   useEffect(() => {
-    const savedHistory = localStorage.getItem('processing_history');
-    if (savedHistory) {
-      try {
-        const parsed = JSON.parse(savedHistory);
-        setHistory(parsed);
-        if (parsed.length > 0 && !selectedId) setSelectedId(parsed[0].id);
-      } catch (e) {
-        console.error("Failed to load history", e);
-      }
+    if (step === 'dashboard' && user) {
+      const fetchHistory = async () => {
+        try {
+          const token = localStorage.getItem('token');
+          const response = await fetch(`${API_URL}/api/history`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setHistory(data);
+            if (data.length > 0 && !selectedId) setSelectedId(data[0].id);
+          }
+        } catch (err) {
+          console.error("Failed to fetch history from DB:", err);
+        }
+      };
+      fetchHistory();
+    } else {
+      setHistory([]);
     }
-  }, []);
+  }, [step, user]);
 
-  // --- Persistent History Saving ---
-  useEffect(() => {
-    if (history.length > 0) {
-      localStorage.setItem('processing_history', JSON.stringify(history));
-    }
-  }, [history]);
-
-  const handleUpdateRule = (fileId, ruleIdx, field, value) => {
+  const handleUpdateRule = async (fileId, ruleIdx, field, value) => {
+    let updatedFile = null;
     setHistory(prev => prev.map(file => {
       if (file.id === fileId) {
         const newRules = [...file.rules];
         newRules[ruleIdx] = { ...newRules[ruleIdx], [field]: value };
-        return { ...file, rules: newRules };
+        updatedFile = { ...file, rules: newRules };
+        return updatedFile;
       }
       return file;
     }));
+
+    if (updatedFile) {
+      try {
+        const token = localStorage.getItem('token');
+        await fetch(`${API_URL}/api/history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(updatedFile)
+        });
+      } catch (err) {
+        console.error("Failed to save updated rules to DB:", err);
+      }
+    }
   };
 
   const handleApplyRules = async (fileId) => {
@@ -894,11 +1382,24 @@ const App = () => {
 
       const data = await response.json();
       if (response.ok) {
-        setHistory(prev => prev.map(f => f.id === fileId ? {
-          ...f,
+        const updated = {
+          ...file,
           previewData: data.preview_data,
           downloadUrl: `${PYTHON_API_URL}${data.download_url}`
-        } : f));
+        };
+
+        // Save updated data to DB
+        const token = localStorage.getItem('token');
+        await fetch(`${API_URL}/api/history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify(updated)
+        });
+
+        setHistory(prev => prev.map(f => f.id === fileId ? updated : f));
         showToast(`Rules applied and data re-extracted for ${file.name}`, 'success');
       } else {
         throw new Error(data.error || 'Reprocessing failed');
@@ -910,12 +1411,25 @@ const App = () => {
     }
   };
 
-  const handleClearHistory = () => {
+  const handleClearHistory = async () => {
     if (window.confirm("Are you sure you want to clear all processing history? This action cannot be undone.")) {
-      setHistory([]);
-      setSelectedId(null);
-      localStorage.removeItem('processing_history');
-      showToast("History cleared successfully", "success");
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`${API_URL}/api/history`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (response.ok) {
+          setHistory([]);
+          setSelectedId(null);
+          showToast("History cleared successfully", "success");
+        } else {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to clear history');
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
     }
   };
 
@@ -926,6 +1440,42 @@ const App = () => {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  // Loading screen automatic forwarding
+  useEffect(() => {
+    if (step === 'loading') {
+      const timer = setTimeout(() => {
+        setStep('dashboard');
+      }, 1800);
+      return () => clearTimeout(timer);
+    }
+  }, [step]);
+
+  // Auto Login at mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      setStep('loading');
+      const fetchProfile = async () => {
+        try {
+          const response = await fetch(`${API_URL}/api/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          if (response.ok) {
+            const data = await response.json();
+            setUser(data.user);
+          } else {
+            localStorage.removeItem('token');
+            setStep('auth');
+          }
+        } catch (err) {
+          localStorage.removeItem('token');
+          setStep('auth');
+        }
+      };
+      fetchProfile();
+    }
+  }, []);
 
   // Resend cooldown timer
   useEffect(() => {
@@ -1020,7 +1570,7 @@ const App = () => {
       if (response.ok) {
         localStorage.setItem('token', data.token);
         setUser(data.user);
-        setStep('dashboard');
+        setStep('loading');
         showToast('Login successful', 'success');
       } else {
         showToast(data.error);
@@ -1091,7 +1641,7 @@ const App = () => {
 
       localStorage.setItem('token', data.token);
       setUser(data.user);
-      setStep('dashboard');
+      setStep('loading');
       showToast(`Automatically signed in as ${data.user.email}`, 'success');
     } catch (error) {
       showToast('Google identity verification failed.');
@@ -1155,7 +1705,9 @@ const App = () => {
 
   return (
     <div className="app-root">
-      {step === 'dashboard' ? (
+      {step === 'loading' ? (
+        <LoadingScreen />
+      ) : step === 'dashboard' ? (
         <div className="dashboard-root">
           <video
             autoPlay
@@ -1167,11 +1719,25 @@ const App = () => {
             <source src="/background.mp4" type="video/mp4" />
           </video>
 
+          <header className="mobile-header">
+            <button className="mobile-menu-btn" onClick={() => setMobileSidebarOpen(true)}>
+              <Menu size={24} />
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <img src="/logo.png" alt="IntelliExtract Logo" style={{ height: '32px', width: 'auto', objectFit: 'contain' }} />
+            </div>
+            <div style={{ width: '24px' }} />
+          </header>
+
           <Sidebar
             activeTab={activeTab}
             setActiveTab={setActiveTab}
             user={user}
             onLogout={handleLogout}
+            collapsed={sidebarCollapsed}
+            setCollapsed={setSidebarCollapsed}
+            mobileOpen={mobileSidebarOpen}
+            setMobileOpen={setMobileSidebarOpen}
           />
           <main className="main-content">
             <AnimatePresence mode="wait">
@@ -1187,7 +1753,7 @@ const App = () => {
                   <PipelineVisualization />
                   <StatsGrid history={history} />
                   <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '2rem' }}>
-                    <RecentProcessingPreview />
+                    <RecentProcessingPreview history={history} setActiveTab={setActiveTab} />
                     <RecentActivity />
                   </div>
                 </motion.div>
@@ -1207,6 +1773,9 @@ const App = () => {
                     selectedId={selectedId} 
                     setSelectedId={setSelectedId} 
                     onClearHistory={handleClearHistory}
+                    onViewTxt={(file) => setViewModal({ type: 'txt', file })}
+                    onViewRules={(file) => setViewModal({ type: 'rules', file })}
+                    onViewMainXlsx={(file) => setViewModal({ type: 'main_xlsx', file })}
                   />
                 </motion.div>
               )}
@@ -1227,6 +1796,7 @@ const App = () => {
                     onApplyRules={handleApplyRules}
                     onClearHistory={handleClearHistory}
                     loading={loading}
+                    onViewRules={(file) => setViewModal({ type: 'rules', file })}
                   />
                 </motion.div>
               )}
@@ -1242,6 +1812,7 @@ const App = () => {
                   <ExcelsPage 
                     history={history} 
                     onClearHistory={handleClearHistory}
+                    onViewMainXlsx={(file) => setViewModal({ type: 'main_xlsx', file })}
                   />
                 </motion.div>
               )}
@@ -1415,6 +1986,9 @@ const App = () => {
             </div>
           </div>
         </div>
+      )}
+      {viewModal && (
+        <FileModal viewModal={viewModal} onClose={() => setViewModal(null)} />
       )}
     </div>
   );

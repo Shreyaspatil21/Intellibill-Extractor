@@ -184,22 +184,25 @@ class BillConverter:
             if has_text:
                 # Capture word map for text-based PDF
                 with pdfplumber.open(input_path) as pdf:
+                    y_offset = 0.0
                     for page in pdf.pages:
                         words = page.extract_words()
                         for w in words:
                             local_word_map.append({
                                 'text': w['text'],
                                 'x0': w['x0'],
-                                'y0': w['top'],
+                                'y0': w['top'] + y_offset,
                                 'x1': w['x1'],
-                                'y1': w['bottom']
+                                'y1': w['bottom'] + y_offset
                             })
+                        y_offset += float(page.height or 1000.0)
                 return self.pdf_to_text(input_path), local_word_map
             else:
                 try:
                     import fitz
                     doc = fitz.open(input_path)
                     output_text = ""
+                    y_offset = 0.0
                     for page in doc:
                         w, h = page.rect.width * 2, page.rect.height * 2
                         pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
@@ -213,11 +216,12 @@ class BillConverter:
                                 local_word_map.append({
                                     'text': text,
                                     'x0': box[0][0],
-                                    'y0': box[0][1],
+                                    'y0': box[0][1] + y_offset,
                                     'x1': box[1][0],
-                                    'y1': box[2][1]
+                                    'y1': box[2][1] + y_offset
                                 })
                         output_text += self._process_ocr_result(res, w, h) + "\n"
+                        y_offset += float(h)
                     doc.close()
                     return output_text, local_word_map
                 except Exception as e:
