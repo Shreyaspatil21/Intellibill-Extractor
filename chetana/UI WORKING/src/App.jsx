@@ -1601,7 +1601,7 @@ const App = () => {
     const initializeGoogle = () => {
       if (window.google) {
         window.google.accounts.id.initialize({
-          client_id: "1065332449181-mcu8s35ddeugnsfb4q1vhsqqe94lt3n1.apps.googleusercontent.com",
+          client_id: "741674675466-2e94d35q16j4nplnb0qu01b3rjq1f94h.apps.googleusercontent.com",
           callback: handleGoogleCallback,
           auto_select: true,
           cancel_on_tap_outside: false
