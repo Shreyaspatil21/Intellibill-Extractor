@@ -1,0 +1,34 @@
+name: Deploy OCR to Hugging Face Spaces
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Push to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          # Navigate to the Python OCR service directory
+          cd shreyash/ETL_GRP_1/ETL_GRP/ETL_2
+          
+          # Initialize a temporary git repo in the subfolder
+          git init
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Stage and commit all backend code
+          git add .
+          git commit -m "Automated Deploy to Hugging Face Spaces"
+          
+          # Force push to Hugging Face Space repository
+          # Note: Replace 'Shreyaspatil21/intellibill-ocr' if your Space name is different
+          git push -f https://Shreyaspatil21:$HF_TOKEN@huggingface.co/spaces/Shreyaspatil21/intellibill-ocr main
